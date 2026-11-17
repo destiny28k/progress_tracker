@@ -45,9 +45,9 @@ export function LoginForm({ next, initialError }: { next: string; initialError: 
         }
         setInfo("Check your inbox and click the confirmation link to finish creating your account.")
       } else {
-        const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/auth/callback?next=/settings` })
+        const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/auth/callback?next=/reset-password` })
         if (error) throw error
-        setInfo("If an account exists for that email, a sign-in link is on its way.")
+        setInfo("If an account exists for that email, a reset link is on its way. Open it in this same browser.")
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong. Please try again.")
