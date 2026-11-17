@@ -7,7 +7,7 @@ import { ArrowRight, AudioLines, BookOpen, CalendarDays, Check, ChevronLeft, Che
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { dateRange, formatDate, monthKey, parseISODate, toISODate } from "@/lib/dates"
 import { cn } from "@/lib/utils"
-import { activities, workoutKinds, type WorkoutKind } from "./data"
+import { workoutKinds, type WorkoutKind } from "./data"
 import { buildIndex, challengeInfo, dailyScore, formatMoney, journalHasContent, journalPreview, type DayIndex } from "./metrics"
 import { useAppData } from "./store"
 import { EmptyState, PageHeading } from "./ui"
@@ -18,7 +18,7 @@ function areasFor(index: DayIndex, date: string) {
   const c = index.comm.get(date)
   const f = index.fit.get(date)
   return {
-    comm: !!c && (c.completed > 0 || c.rest >= activities.length),
+    comm: !!c && (c.completed > 0 || c.rest > 0),
     fit: !!f && (f.count > 0 || f.rest),
     journal: index.journal.has(date),
     money: (index.tx.get(date) ?? 0) > 0,
@@ -72,11 +72,11 @@ function Legend() {
 }
 
 export function CalendarPage() {
-  const { profile, today, logs, workouts, journal, transactions, notes } = useAppData()
+  const { profile, today, practices, logs, workouts, journal, transactions, notes } = useAppData()
   const [selected, setSelected] = useState(today)
   const [month, setMonth] = useState(() => parseISODate(today))
 
-  const index = useMemo(() => buildIndex({ logs, workouts, journal, transactions }), [logs, workouts, journal, transactions])
+  const index = useMemo(() => buildIndex({ practices, logs, workouts, journal, transactions }), [practices, logs, workouts, journal, transactions])
   const challenge = challengeInfo(profile, today)
   const score = (date: string) => (date > today ? 0 : dailyScore(index, date, profile.fitness_target_min))
   const cellData = useMemo(() => ({ index, today, start: profile.start_date, end: profile.end_date, target: profile.fitness_target_min }), [index, today, profile.start_date, profile.end_date, profile.fitness_target_min])
@@ -163,9 +163,9 @@ export function CalendarPage() {
               {selected < profile.start_date && <p className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2.5 text-[10px] text-white/40">This day is before your challenge started on {formatDate(profile.start_date)}.</p>}
 
               <div>
-                <div className="flex items-center justify-between"><span className="flex items-center gap-2 text-[11px] font-medium text-white/75"><AudioLines size={13} className="text-sky-200" />Communication</span><span className="text-[10px] text-white/40">{[...day.dayLogs.values()].filter((l) => l.status === "completed").length} / {activities.length}</span></div>
+                <div className="flex items-center justify-between"><span className="flex items-center gap-2 text-[11px] font-medium text-white/75"><AudioLines size={13} className="text-sky-200" />Communication</span><span className="text-[10px] text-white/40">{[...day.dayLogs.values()].filter((l) => l.status === "completed").length} / {practices.length}</span></div>
                 <ul className="mt-2 flex flex-col gap-1">
-                  {activities.map((a) => {
+                  {practices.map((a) => {
                     const log = day.dayLogs.get(a.id)
                     const Icon = log?.status === "completed" ? Check : log?.status === "skipped" ? RotateCcw : log?.status === "rest-day" ? Clock3 : null
                     return (

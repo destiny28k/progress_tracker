@@ -5,9 +5,20 @@ import type { PostgrestError } from "@supabase/supabase-js"
 import { createClient } from "@/lib/supabase/client"
 import type { Tables, TablesInsert, TablesUpdate } from "@/lib/supabase/database.types"
 import { addDays, todayISO } from "@/lib/dates"
-import { activities, type ActivityItem, type ActivityStatus } from "./data"
+import { practiceIconNames, type ActivityItem, type ActivityStatus, type PracticeIcon } from "./data"
 
 export type Profile = Tables<"profiles">
+export type PracticeRow = Tables<"practices">
+export type PracticeInput = { title: string; description: string; minutes: number; icon: PracticeIcon }
+
+const toActivity = (row: PracticeRow): ActivityItem => ({
+  id: row.key,
+  rowId: row.id,
+  title: row.title,
+  description: row.description,
+  minutes: row.minutes,
+  icon: (practiceIconNames as readonly string[]).includes(row.icon) ? (row.icon as PracticeIcon) : "thought",
+})
 export type ActivityLog = Tables<"activity_logs">
 export type PracticeNote = Tables<"practice_notes">
 export type Transaction = Tables<"transactions">
@@ -21,6 +32,7 @@ type Toast = { id: number; message: string; tone: "success" | "error" }
 
 type StoreState = {
   profile: Profile | null
+  practiceRows: PracticeRow[]
   logs: ActivityLog[]
   notes: PracticeNote[]
   transactions: Transaction[]
@@ -30,7 +42,7 @@ type StoreState = {
   journal: JournalEntry[]
 }
 
-const emptyState: StoreState = { profile: null, logs: [], notes: [], transactions: [], clients: [], workouts: [], bodyMetrics: [], journal: [] }
+const emptyState: StoreState = { profile: null, practiceRows: [], logs: [], notes: [], transactions: [], clients: [], workouts: [], bodyMetrics: [], journal: [] }
 
 type StoreValue = StoreState & {
   user: { id: string; email: string }
@@ -41,6 +53,11 @@ type StoreValue = StoreState & {
   toasts: Toast[]
   notify: (message: string, tone?: Toast["tone"]) => void
   dismissToast: (id: number) => void
+  /** The user's active daily practices, in display order. */
+  practices: ActivityItem[]
+  addPractice: (input: PracticeInput) => Promise<boolean>
+  updatePractice: (rowId: string, input: PracticeInput) => Promise<boolean>
+  deletePractice: (rowId: string) => Promise<void>
   todayStatus: Record<string, ActivityStatus>
   skipTarget: ActivityItem | null
   requestSkip: (activity: ActivityItem | null) => void
@@ -102,8 +119,9 @@ export function DataProvider({ user, children }: { user: { id: string; email: st
 
   const reload = useCallback(async () => {
     const since = addDays(todayISO(), -400)
-    const [profile, logs, notes, transactions, clients, workouts, bodyMetrics, journal] = await Promise.all([
+    const [profile, practiceRows, logs, notes, transactions, clients, workouts, bodyMetrics, journal] = await Promise.all([
       supabase.from("profiles").select("*").eq("id", user.id).maybeSingle(),
+      supabase.from("practices").select("*").eq("archived", false).order("position", { ascending: true }).order("created_at", { ascending: true }),
       supabase.from("activity_logs").select("*").gte("log_date", since),
       supabase.from("practice_notes").select("*").gte("note_date", since),
       supabase.from("transactions").select("*").gte("occurred_on", since).order("occurred_on", { ascending: false }).order("created_at", { ascending: false }),
@@ -112,7 +130,7 @@ export function DataProvider({ user, children }: { user: { id: string; email: st
       supabase.from("body_metrics").select("*").order("measured_on", { ascending: true }),
       supabase.from("journal_entries").select("*").order("entry_date", { ascending: false }),
     ])
-    const error = [profile, logs, notes, transactions, clients, workouts, bodyMetrics, journal].find((r) => r.error)?.error
+    const error = [profile, practiceRows, logs, notes, transactions, clients, workouts, bodyMetrics, journal].find((r) => r.error)?.error
     if (error) {
       setLoadError(error.message)
       setStatus("error")
@@ -131,6 +149,7 @@ export function DataProvider({ user, children }: { user: { id: string; email: st
     }
     setState({
       profile: profileRow,
+      practiceRows: practiceRows.data ?? [],
       logs: logs.data ?? [],
       notes: notes.data ?? [],
       transactions: transactions.data ?? [],
@@ -156,11 +175,38 @@ export function DataProvider({ user, children }: { user: { id: string; email: st
     void reload()
   }, [notify, reload])
 
+  const practices = useMemo(() => state.practiceRows.map(toActivity), [state.practiceRows])
+
   const todayStatus = useMemo(() => {
-    const result: Record<string, ActivityStatus> = Object.fromEntries(activities.map((a) => [a.id, "pending" as ActivityStatus]))
-    for (const log of state.logs) if (log.log_date === today) result[log.activity_id] = log.status
+    const result: Record<string, ActivityStatus> = Object.fromEntries(practices.map((a) => [a.id, "pending" as ActivityStatus]))
+    for (const log of state.logs) if (log.log_date === today && log.activity_id in result) result[log.activity_id] = log.status
     return result
-  }, [state.logs, today])
+  }, [state.logs, today, practices])
+
+  const addPractice = useCallback(async (input: PracticeInput) => {
+    const position = state.practiceRows.reduce((max, p) => Math.max(max, p.position), -1) + 1
+    const { data, error } = await supabase.from("practices").insert({ ...input, position, user_id: user.id }).select().single()
+    if (error) { fail(error); return false }
+    setState((s) => ({ ...s, practiceRows: [...s.practiceRows, data] }))
+    notify("Practice added")
+    return true
+  }, [supabase, user.id, state.practiceRows, fail, notify])
+
+  const updatePractice = useCallback(async (rowId: string, input: PracticeInput) => {
+    const { data, error } = await supabase.from("practices").update(input).eq("id", rowId).select().single()
+    if (error) { fail(error); return false }
+    setState((s) => ({ ...s, practiceRows: s.practiceRows.map((p) => (p.id === rowId ? data : p)) }))
+    notify("Practice updated")
+    return true
+  }, [supabase, fail, notify])
+
+  /** Archives the practice: it leaves your daily list, but past completions stay in your history. */
+  const deletePractice = useCallback(async (rowId: string) => {
+    setState((s) => ({ ...s, practiceRows: s.practiceRows.filter((p) => p.id !== rowId) }))
+    const { error } = await supabase.from("practices").update({ archived: true }).eq("id", rowId)
+    if (error) fail(error)
+    else notify("Practice removed")
+  }, [supabase, fail, notify])
 
   const setActivityStatus = useCallback<StoreValue["setActivityStatus"]>(async (activityId, nextStatus, extra = {}) => {
     const date = today
@@ -182,14 +228,14 @@ export function DataProvider({ user, children }: { user: { id: string; email: st
     setState((s) => {
       const others = s.logs.filter((l) => l.log_date !== date || (!on && l.status !== "rest-day"))
       if (!on) return { ...s, logs: others }
-      return { ...s, logs: [...others, ...activities.map((a) => ({ id: `tmp-${a.id}-${date}`, user_id: user.id, log_date: date, activity_id: a.id, status: "rest-day" as const, skip_reason: null, note: null, created_at: now, updated_at: now }))] }
+      return { ...s, logs: [...others, ...practices.map((a) => ({ id: `tmp-${a.id}-${date}`, user_id: user.id, log_date: date, activity_id: a.id, status: "rest-day" as const, skip_reason: null, note: null, created_at: now, updated_at: now }))] }
     })
     const { error } = on
-      ? await supabase.from("activity_logs").upsert(activities.map((a) => ({ user_id: user.id, log_date: date, activity_id: a.id, status: "rest-day" as const, skip_reason: null, note: null })), { onConflict: "user_id,log_date,activity_id" })
+      ? await supabase.from("activity_logs").upsert(practices.map((a) => ({ user_id: user.id, log_date: date, activity_id: a.id, status: "rest-day" as const, skip_reason: null, note: null })), { onConflict: "user_id,log_date,activity_id" })
       : await supabase.from("activity_logs").delete().match({ user_id: user.id, log_date: date, status: "rest-day" })
     if (error) fail(error)
     else notify(on ? "Rest day saved. Recovery counts too." : "Rest day removed")
-  }, [today, user.id, supabase, fail, notify])
+  }, [today, user.id, supabase, fail, notify, practices])
 
   const savePracticeNote = useCallback(async (note: string) => {
     const { data, error } = await supabase.from("practice_notes").upsert({ user_id: user.id, note_date: today, note }, { onConflict: "user_id,note_date" }).select().single()
@@ -294,6 +340,10 @@ export function DataProvider({ user, children }: { user: { id: string; email: st
     toasts,
     notify,
     dismissToast,
+    practices,
+    addPractice,
+    updatePractice,
+    deletePractice,
     todayStatus,
     skipTarget,
     requestSkip: setSkipTarget,

@@ -28,7 +28,7 @@ import type { LucideIcon } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { formatDate } from "@/lib/dates"
 import { cn } from "@/lib/utils"
-import { activities, skipReasons } from "./data"
+import { skipReasons } from "./data"
 import { challengeInfo, journalHasContent } from "./metrics"
 import { useStore, type Profile } from "./store"
 import { dialogClass, primaryButton, ProgressBar } from "./ui"
@@ -175,15 +175,16 @@ function ProfileMenu({ name, email, onSignOut }: { name: string; email: string; 
 
 function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const router = useRouter()
+  const { practices: userPractices } = useStore()
   const [query, setQuery] = useState("")
   const [selected, setSelected] = useState(0)
   const items = useMemo(() => {
     const pages = navigation.map((n) => ({ label: n.label, hint: "Page", href: n.href, icon: n.icon, keywords: n.keywords }))
-    const practices = activities.map((a) => ({ label: a.title, hint: "Practice", href: "/communication", icon: AudioLines, keywords: a.description }))
+    const practices = userPractices.map((a) => ({ label: a.title, hint: "Practice", href: "/communication", icon: AudioLines, keywords: a.description }))
     const q = query.trim().toLowerCase()
     const all = [...pages, ...practices]
     return q ? all.filter((i) => `${i.label} ${i.keywords}`.toLowerCase().includes(q)) : pages
-  }, [query])
+  }, [query, userPractices])
   const go = (href: string) => { onOpenChange(false); setQuery(""); router.push(href) }
   return (
     <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) setQuery("") }}>

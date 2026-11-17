@@ -1,22 +1,17 @@
 export type ActivityStatus = "completed" | "pending" | "skipped" | "rest-day"
 
+export const practiceIconNames = ["voice", "video", "story", "thought", "grammar", "reading", "pen", "brain", "music", "target"] as const
+export type PracticeIcon = (typeof practiceIconNames)[number]
+
+/** A daily practice the user has chosen. `id` is the practice key stored in activity logs; `rowId` is the database row. */
 export type ActivityItem = {
   id: string
+  rowId: string
   title: string
   description: string
   minutes: number
-  icon: "voice" | "video" | "story" | "thought" | "grammar" | "reading"
+  icon: PracticeIcon
 }
-
-/** The daily communication programme. These are the practice definitions, not user data. */
-export const activities: ActivityItem[] = [
-  { id: "record", title: "Record yourself speaking", description: "Pick a topic and speak freely. Listen back with curiosity, not judgment.", minutes: 6, icon: "voice" },
-  { id: "shadow", title: "Video shadowing", description: "Follow along with a speaker you admire. Match their rhythm and pace.", minutes: 10, icon: "video" },
-  { id: "story", title: "Storytelling practice", description: "Turn a small moment from your day into a story with a beginning and end.", minutes: 10, icon: "story" },
-  { id: "thought", title: "Thought-to-sentence practice", description: "Take one thought and express it in three clear, different ways.", minutes: 10, icon: "thought" },
-  { id: "grammar", title: "Grammar & tongue twisters", description: "Warm up your words with a short articulation and grammar drill.", minutes: 5, icon: "grammar" },
-  { id: "reading", title: "Reading", description: "Read a few pages aloud or quietly. Let your vocabulary grow naturally.", minutes: 10, icon: "reading" },
-]
 
 export const skipReasons = ["Busy", "Not feeling well", "Unexpected work", "Personal reasons", "Other"]
 

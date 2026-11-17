@@ -1,5 +1,5 @@
 import { addDays, dateRange, diffDays, monthKey, shiftMonth, startOfWeek } from "@/lib/dates"
-import { activities } from "./data"
+import type { ActivityItem } from "./data"
 import type { ActivityLog, JournalEntry, Profile, Transaction, Workout } from "./store"
 
 // ---------- Challenge ----------
@@ -26,6 +26,8 @@ export function challengeInfo(profile: Profile, today: string) {
 // ---------- Daily index ----------
 
 export type DayIndex = {
+  /** How many practices make up a full communication day. */
+  practiceCount: number
   comm: Map<string, { completed: number; skipped: number; rest: number; minutes: number }>
   fit: Map<string, { minutes: number; count: number; rest: boolean }>
   journal: Set<string>
@@ -36,9 +38,8 @@ export function journalHasContent(entry: Pick<JournalEntry, "accomplished" | "we
   return [entry.accomplished, entry.went_wrong, entry.learned, entry.improve, entry.priorities].some((v) => v.trim().length > 0)
 }
 
-const minutesById = new Map(activities.map((a) => [a.id, a.minutes]))
-
-export function buildIndex(data: { logs: ActivityLog[]; workouts: Workout[]; journal: JournalEntry[]; transactions: Transaction[] }): DayIndex {
+export function buildIndex(data: { practices: ActivityItem[]; logs: ActivityLog[]; workouts: Workout[]; journal: JournalEntry[]; transactions: Transaction[] }): DayIndex {
+  const minutesById = new Map(data.practices.map((a) => [a.id, a.minutes]))
   const comm: DayIndex["comm"] = new Map()
   for (const log of data.logs) {
     const entry = comm.get(log.log_date) ?? { completed: 0, skipped: 0, rest: 0, minutes: 0 }
@@ -62,14 +63,20 @@ export function buildIndex(data: { logs: ActivityLog[]; workouts: Workout[]; jou
   const journal = new Set(data.journal.filter(journalHasContent).map((j) => j.entry_date))
   const tx: DayIndex["tx"] = new Map()
   for (const t of data.transactions) tx.set(t.occurred_on, (tx.get(t.occurred_on) ?? 0) + 1)
-  return { comm, fit, journal, tx }
+  return { practiceCount: Math.max(data.practices.length, 1), comm, fit, journal, tx }
+}
+
+/** A communication day counts as kept with any completed practice or a planned rest day. */
+export function commKept(index: DayIndex, date: string) {
+  const c = index.comm.get(date)
+  return !!c && (c.completed > 0 || c.rest > 0)
 }
 
 /** 0–100: share of the day's plan done across communication, movement and journaling. Rest days count as kept. */
 export function dailyScore(index: DayIndex, date: string, fitnessTarget: number) {
   const c = index.comm.get(date)
   const f = index.fit.get(date)
-  const comm = c ? (c.rest >= activities.length ? 1 : c.completed / activities.length) : 0
+  const comm = c ? (c.rest > 0 ? 1 : Math.min(c.completed / index.practiceCount, 1)) : 0
   const fit = f ? (f.rest && f.minutes === 0 ? 1 : Math.min(f.minutes / Math.max(fitnessTarget, 1), 1)) : 0
   const journal = index.journal.has(date) ? 1 : 0
   return Math.round(((comm + fit + journal) / 3) * 100)
@@ -99,10 +106,7 @@ export function streak(index: DayIndex, profile: Profile, today: string) {
 
 /** Communication-only streak: days with at least one completed practice or a rest day. */
 export function practiceStreak(index: DayIndex, today: string) {
-  const kept = (d: string) => {
-    const c = index.comm.get(d)
-    return !!c && (c.completed > 0 || c.rest >= activities.length)
-  }
+  const kept = (d: string) => commKept(index, d)
   let day = kept(today) ? today : addDays(today, -1)
   let count = 0
   while (kept(day)) {

@@ -8,7 +8,7 @@ import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Too
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { addDays, formatDate, greeting, monthKey, relativeDay, shiftMonth } from "@/lib/dates"
 import { cn } from "@/lib/utils"
-import { activities, type ActivityStatus } from "./data"
+import type { ActivityStatus } from "./data"
 import { activityCount, buildIndex, challengeInfo, clampPct, consistency, dailyScore, formatMoney, journalHasContent, journalPreview, journalText, monthTotals, percentChange, readingTime, streak, weekDates } from "./metrics"
 import { useAppData } from "./store"
 import { axisTick, Delta, EmptyState, tooltipStyle } from "./ui"
@@ -35,10 +35,10 @@ function statusLabel(status: ActivityStatus) {
 }
 
 export function OverviewPage() {
-  const { profile, today, logs, workouts, journal, transactions, todayStatus, setActivityStatus, requestSkip } = useAppData()
+  const { profile, today, practices, logs, workouts, journal, transactions, todayStatus, setActivityStatus, requestSkip } = useAppData()
 
   const m = useMemo(() => {
-    const index = buildIndex({ logs, workouts, journal, transactions })
+    const index = buildIndex({ practices, logs, workouts, journal, transactions })
     const challenge = challengeInfo(profile, today)
     const consistencyNow = consistency(index, profile, today)
     const consistencyPrev = consistency(index, profile, today, addDays(today, -7))
@@ -61,11 +61,11 @@ export function OverviewPage() {
       streak: streak(index, profile, today),
       prevMonth: monthTotals(transactions, shiftMonth(monthKey(today), -1)),
     }
-  }, [profile, today, logs, workouts, journal, transactions, todayStatus])
+  }, [profile, today, practices, logs, workouts, journal, transactions, todayStatus])
 
   const { challenge } = m
   const name = profile.display_name.split(" ")[0] || "there"
-  const todayActivities = activities.slice(0, 4)
+  const todayActivities = practices.slice(0, 4)
   const savingsPct = profile.monthly_savings_goal > 0 ? clampPct((m.month.savings / profile.monthly_savings_goal) * 100) : 0
   const ringOffset = 138.23 * (1 - challenge.pct / 100)
   const headline = challenge.phase === "upcoming" ? "Your challenge is about to begin." : challenge.phase === "finished" ? "You finished the challenge." : challenge.day === 1 ? "Your next chapter starts now." : "Keep the momentum going."
@@ -119,7 +119,7 @@ export function OverviewPage() {
         <SectionHeading title="Your three focus areas" action="View progress" href="/progress" />
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           <GoalCard icon={WalletCards} title="Financial stability" caption={`Income ${formatMoney(m.month.income, profile.currency)} · ${formatMoney(m.month.expenses, profile.currency)} expenses`} metric={formatMoney(m.month.savings, profile.currency)} metricLabel="net savings this month" progress={savingsPct} tone="bg-emerald-400/10 text-emerald-200" href="/finance" />
-          <GoalCard icon={AudioLines} title="Communication" caption="Speaking · reading · storytelling" metric={`${m.completedToday}/${activities.length}`} metricLabel="practices done today" progress={clampPct((m.completedToday / activities.length) * 100)} tone="bg-sky-400/10 text-sky-200" href="/communication" />
+          <GoalCard icon={AudioLines} title="Communication" caption="Speaking · reading · storytelling" metric={`${m.completedToday}/${Math.max(practices.length, 1)}`} metricLabel="practices done today" progress={clampPct((m.completedToday / Math.max(practices.length, 1)) * 100)} tone="bg-sky-400/10 text-sky-200" href="/communication" />
           <GoalCard icon={Dumbbell} title="Physique" caption={`${profile.fitness_target_min}-minute daily movement target`} metric={`${m.workoutsThisWeek} / ${m.elapsedThisWeek}`} metricLabel="active days this week" progress={clampPct((m.workoutsThisWeek / Math.max(m.elapsedThisWeek, 1)) * 100)} tone="bg-orange-300/10 text-orange-200" href="/physique" />
         </div>
       </section>
@@ -138,7 +138,7 @@ export function OverviewPage() {
               </div>
             )
           })}</CardContent>
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.06] pt-4"><div className="flex flex-wrap items-center gap-3"><span className="text-[10px] text-white/35"><CircleCheck size={12} className="mr-1 inline text-lime-200/70" />{m.completedToday} completed</span><span className="inline-flex items-center gap-1.5 text-[10px] text-white/35"><span aria-hidden="true" className="size-1.5 rounded-full bg-amber-200/70" />{m.skippedToday} skipped</span></div><Link href="/communication" className="text-[10px] font-medium text-lime-200/80 hover:text-lime-100">See all {activities.length} <ChevronRight size={12} className="ml-0.5 inline" /></Link></div>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.06] pt-4"><div className="flex flex-wrap items-center gap-3"><span className="text-[10px] text-white/35"><CircleCheck size={12} className="mr-1 inline text-lime-200/70" />{m.completedToday} completed</span><span className="inline-flex items-center gap-1.5 text-[10px] text-white/35"><span aria-hidden="true" className="size-1.5 rounded-full bg-amber-200/70" />{m.skippedToday} skipped</span></div><Link href="/communication" className="text-[10px] font-medium text-lime-200/80 hover:text-lime-100">See all {Math.max(practices.length, 1)} <ChevronRight size={12} className="ml-0.5 inline" /></Link></div>
         </Card>
         <Card className="panel-card rounded-2xl border border-white/[0.07] p-5 sm:p-6">
           <CardHeader className="flex-row items-start justify-between p-0"><div><CardTitle className="text-[14px] font-semibold text-white/90">This week</CardTitle><p className="mt-1.5 text-[11px] text-white/40">Your effort, adding up.</p></div><span className="rounded-lg border border-white/[0.07] px-2 py-1 text-[10px] text-white/45">{formatDate(m.weekBars[0].date, { month: "short", day: "numeric" })} — {formatDate(m.weekBars[6].date, { day: "numeric" })}</span></CardHeader>

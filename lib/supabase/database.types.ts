@@ -38,6 +38,18 @@ export type Database = {
         created_at: string
         updated_at: string
       }, "log_date" | "activity_id" | "status">
+      practices: Table<{
+        id: string
+        user_id: string
+        key: string
+        title: string
+        description: string
+        minutes: number
+        icon: string
+        position: number
+        archived: boolean
+        created_at: string
+      }, "title">
       practice_notes: Table<{
         id: string
         user_id: string

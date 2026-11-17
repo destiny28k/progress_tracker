@@ -5,16 +5,15 @@ import { BookOpen, Check, Dumbbell, Heart, Sparkles, Target, TrendingUp, WalletC
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis } from "recharts"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { addDays, dateRange, formatDate, monthKey } from "@/lib/dates"
-import { activities } from "./data"
 import { activityCount, buildIndex, challengeInfo, clampPct, consistency, dailyScore, formatMoney, monthTotals, percentChange, weekDates } from "./metrics"
 import { useAppData } from "./store"
 import { axisTick, Delta, Legend, MetricCard, PageHeading, ProgressBar, tooltipStyle } from "./ui"
 
 export function ProgressPage() {
-  const { profile, today, logs, workouts, journal, transactions } = useAppData()
+  const { profile, today, practices, logs, workouts, journal, transactions } = useAppData()
 
   const m = useMemo(() => {
-    const index = buildIndex({ logs, workouts, journal, transactions })
+    const index = buildIndex({ practices, logs, workouts, journal, transactions })
     const c = challengeInfo(profile, today)
     const elapsed = c.phase === "upcoming" ? [] : dateRange(c.from, c.to)
     const overall = c.phase === "upcoming" ? null : consistency(index, profile, today, c.to, Math.max(elapsed.length, 1))
@@ -22,7 +21,7 @@ export function ProgressPage() {
     const weekCount = week.filter((d) => d <= today).reduce((s, d) => s + activityCount(index, d), 0)
     const lastWeekCount = weekDates(today, -1).reduce((s, d) => s + activityCount(index, d), 0)
     const resets = logs.filter((l) => l.log_date >= c.from && l.log_date <= c.to && l.status === "skipped").length
-      + elapsed.filter((d) => (index.comm.get(d)?.rest ?? 0) >= activities.length || index.fit.get(d)?.rest).length
+      + elapsed.filter((d) => (index.comm.get(d)?.rest ?? 0) > 0 || index.fit.get(d)?.rest).length
     const bars = week.map((d) => ({
       day: formatDate(d, { weekday: "short" }),
       date: d,
@@ -38,12 +37,12 @@ export function ProgressPage() {
       return { date, day: i + 1, future: date > today, score: date > today ? 0 : dailyScore(index, date, profile.fitness_target_min) }
     })
     return { c, elapsed, overall, weekCount, lastWeekCount, resets, bars, commDone, activeDays, savings, heat }
-  }, [profile, today, logs, workouts, journal, transactions])
+  }, [profile, today, practices, logs, workouts, journal, transactions])
 
   const { c } = m
   const goalRows = [
     { icon: WalletCards, label: "Financial stability", pct: profile.monthly_savings_goal > 0 ? clampPct((m.savings / profile.monthly_savings_goal) * 100) : 0, color: "bg-emerald-200", description: `${formatMoney(m.savings, profile.currency)} of ${formatMoney(profile.monthly_savings_goal, profile.currency)} saved this month` },
-    { icon: BookOpen, label: "Communication", pct: m.elapsed.length ? clampPct((m.commDone / (m.elapsed.length * activities.length)) * 100) : 0, color: "bg-sky-200", description: `${m.commDone} of ${m.elapsed.length * activities.length} practices completed` },
+    { icon: BookOpen, label: "Communication", pct: m.elapsed.length ? clampPct((m.commDone / (m.elapsed.length * Math.max(practices.length, 1))) * 100) : 0, color: "bg-sky-200", description: `${m.commDone} of ${m.elapsed.length * Math.max(practices.length, 1)} practices completed` },
     { icon: Dumbbell, label: "Physique", pct: m.elapsed.length ? clampPct((m.activeDays / m.elapsed.length) * 100) : 0, color: "bg-orange-200", description: `${m.activeDays} of ${m.elapsed.length} days with movement or planned rest` },
   ]
 
