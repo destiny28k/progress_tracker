@@ -18,6 +18,7 @@ import {
   LoaderCircle,
   LogOut,
   Menu,
+  Plus,
   Search,
   Settings2,
   Sparkles,
@@ -28,8 +29,10 @@ import type { LucideIcon } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { formatDate } from "@/lib/dates"
 import { cn } from "@/lib/utils"
-import { skipReasons } from "./data"
+import { AreaDialog } from "./area-page"
+import { areaColors, skipReasons } from "./data"
 import { challengeInfo, journalHasContent } from "./metrics"
+import { practiceIcons } from "./practice-icons"
 import { useStore, type Profile } from "./store"
 import { dialogClass, primaryButton, ProgressBar } from "./ui"
 
@@ -93,6 +96,36 @@ function NavLinks({ pathname, onNavigate, compact = false }: { pathname: string;
   })
 }
 
+/** Sidebar section listing the user's custom focus areas, with a button to create one. */
+function AreaLinks({ pathname, onNavigate, onCreate, compact = false }: { pathname: string; onNavigate?: () => void; onCreate: () => void; compact?: boolean }) {
+  const { areas } = useStore()
+  return (
+    <div className="mt-6">
+      <div className="flex items-center justify-between px-3">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">Focus areas</span>
+        <button onClick={onCreate} aria-label="Create a new focus area" className="grid size-6 place-items-center rounded-md text-white/40 transition hover:bg-white/[0.06] hover:text-lime-200"><Plus size={14} /></button>
+      </div>
+      <nav aria-label="Focus areas" className="mt-2 flex flex-col gap-1">
+        {areas.map((area) => {
+          const href = `/areas/${area.id}`
+          const active = pathname === href
+          const Icon = practiceIcons[area.icon]
+          return (
+            <Link key={area.id} href={href} onClick={onNavigate} aria-current={active ? "page" : undefined} className={cn("nav-link flex w-full items-center gap-3 rounded-xl px-3 text-left transition-colors", compact ? "py-3 text-sm" : "py-2.5 text-[13px]", active && "nav-link-active")}>
+              <Icon aria-hidden="true" size={17} strokeWidth={1.8} style={{ color: areaColors[area.color] }} />
+              <span className="truncate">{area.name}</span>
+              {active && !compact && <span className="ml-auto size-1.5 shrink-0 rounded-full bg-lime-300" />}
+            </Link>
+          )
+        })}
+        <button onClick={onCreate} className={cn("flex w-full items-center gap-3 rounded-xl border border-dashed border-white/[0.08] px-3 text-left text-white/40 transition hover:border-white/20 hover:text-white/75", compact ? "py-3 text-sm" : "py-2.5 text-[12px]")}>
+          <Plus size={16} />New area
+        </button>
+      </nav>
+    </div>
+  )
+}
+
 function usePopover() {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -115,9 +148,14 @@ function useReminders() {
     const items: { text: string; href: string; done: boolean }[] = []
     if (c.phase === "upcoming") return [{ text: `Your challenge starts in ${c.startsIn} day${c.startsIn === 1 ? "" : "s"}`, href: "/settings", done: false }]
     if (c.phase === "finished") return [{ text: "Challenge complete — set new dates to start another round", href: "/settings", done: false }]
-    const statuses = Object.values(store.todayStatus)
-    const pending = statuses.filter((s) => s === "pending").length
+    const pendingIn = (areaId: string | null) => store.practicesFor(areaId).filter((p) => (store.todayStatus[p.id] ?? "pending") === "pending").length
+    const pending = pendingIn(null)
     items.push({ text: pending ? `${pending} communication practice${pending === 1 ? "" : "s"} still open` : "Communication practice handled for today", href: "/communication", done: pending === 0 })
+    for (const area of store.areas) {
+      if (store.practicesFor(area.id).length === 0) continue
+      const open = pendingIn(area.id)
+      items.push({ text: open ? `${open} ${area.name} task${open === 1 ? "" : "s"} still open` : `${area.name} done for today`, href: `/areas/${area.id}`, done: open === 0 })
+    }
     const todaysWorkouts = store.workouts.filter((w) => w.workout_date === store.today)
     const minutes = todaysWorkouts.reduce((sum, w) => sum + w.duration_min, 0)
     const moved = todaysWorkouts.some((w) => w.kind === "rest") || minutes >= store.profile.fitness_target_min
@@ -125,7 +163,7 @@ function useReminders() {
     const journaled = store.journal.some((j) => j.entry_date === store.today && journalHasContent(j))
     items.push({ text: journaled ? "Today's reflection is saved" : "Write today's journal reflection", href: "/journal", done: journaled })
     return items
-  }, [store.profile, store.today, store.todayStatus, store.workouts, store.journal])
+  }, [store.profile, store.today, store.todayStatus, store.workouts, store.journal, store.areas, store])
 }
 
 function NotificationsMenu() {
@@ -175,16 +213,20 @@ function ProfileMenu({ name, email, onSignOut }: { name: string; email: string; 
 
 function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const router = useRouter()
-  const { practices: userPractices } = useStore()
+  const { practices: userPractices, areas } = useStore()
   const [query, setQuery] = useState("")
   const [selected, setSelected] = useState(0)
   const items = useMemo(() => {
-    const pages = navigation.map((n) => ({ label: n.label, hint: "Page", href: n.href, icon: n.icon, keywords: n.keywords }))
-    const practices = userPractices.map((a) => ({ label: a.title, hint: "Practice", href: "/communication", icon: AudioLines, keywords: a.description }))
+    const pages = [
+      ...navigation.map((n) => ({ label: n.label, hint: "Page", href: n.href, icon: n.icon, keywords: n.keywords })),
+      ...areas.map((a) => ({ label: a.name, hint: "Focus area", href: `/areas/${a.id}`, icon: practiceIcons[a.icon], keywords: a.description })),
+    ]
+    const areaName = new Map(areas.map((a) => [a.id, a.name]))
+    const practices = userPractices.map((a) => ({ label: a.title, hint: a.areaId ? areaName.get(a.areaId) ?? "Task" : "Practice", href: a.areaId ? `/areas/${a.areaId}` : "/communication", icon: practiceIcons[a.icon], keywords: a.description }))
     const q = query.trim().toLowerCase()
     const all = [...pages, ...practices]
     return q ? all.filter((i) => `${i.label} ${i.keywords}`.toLowerCase().includes(q)) : pages
-  }, [query, userPractices])
+  }, [query, userPractices, areas])
   const go = (href: string) => { onOpenChange(false); setQuery(""); router.push(href) }
   return (
     <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) setQuery("") }}>
@@ -283,7 +325,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const store = useStore()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
-  const current = navigation.find((n) => isActive(pathname, n.href)) ?? navigation[0]
+  const [areaDialog, setAreaDialog] = useState({ open: false, key: 0 })
+  const openAreaDialog = () => { setMobileMenuOpen(false); setAreaDialog((d) => ({ open: true, key: d.key + 1 })) }
+  const currentArea = store.areas.find((a) => pathname === `/areas/${a.id}`)
+  const pageTitle = currentArea?.name ?? (navigation.find((n) => isActive(pathname, n.href)) ?? navigation[0]).title
   const name = store.profile?.display_name || store.user.email.split("@")[0]
 
   useEffect(() => {
@@ -301,6 +346,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="mt-9">{store.profile ? <ChallengeMini profile={store.profile} today={store.today} /> : <div className="h-[138px] animate-pulse rounded-2xl bg-white/[0.03]" />}</div>
         <div className="mt-8 px-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">Workspace</div>
         <nav aria-label="Main navigation" className="mt-3 flex flex-col gap-1"><NavLinks pathname={pathname} /></nav>
+        {store.status === "ready" && <AreaLinks pathname={pathname} onCreate={openAreaDialog} />}
         <div className="mt-auto pt-6">
           <div className="sidebar-note rounded-2xl p-4">
             <div className="flex size-8 items-center justify-center rounded-xl bg-lime-300/10 text-lime-200"><Activity size={16} /></div>
@@ -316,6 +362,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="flex items-center justify-between"><Brand /><button aria-label="Close navigation" className="rounded-lg p-2 text-white/60" onClick={() => setMobileMenuOpen(false)}><X size={18} /></button></div>
           {store.profile && <div className="mt-7"><ChallengeMini profile={store.profile} today={store.today} /></div>}
           <nav aria-label="Mobile navigation" className="mt-6 flex flex-col gap-1"><NavLinks pathname={pathname} compact onNavigate={() => setMobileMenuOpen(false)} /></nav>
+          {store.status === "ready" && <AreaLinks pathname={pathname} compact onNavigate={() => setMobileMenuOpen(false)} onCreate={openAreaDialog} />}
         </aside>
       )}
 
@@ -324,7 +371,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-3">
             <button className="grid size-9 place-items-center rounded-xl border border-white/[0.08] text-white/70 md:hidden" aria-label="Open navigation" onClick={() => setMobileMenuOpen(true)}><Menu size={18} /></button>
             <div className="hidden text-xs text-white/35 sm:block">Workspace <span className="mx-2 text-white/20">/</span></div>
-            <h1 className="text-[13px] font-medium text-white/85">{current.title}</h1>
+            <h1 className="truncate text-[13px] font-medium text-white/85">{pageTitle}</h1>
           </div>
           <div className="flex items-center gap-1 sm:gap-2">
             <button onClick={() => setPaletteOpen(true)} className="hidden items-center gap-2 rounded-xl border border-white/[0.07] bg-white/[0.025] px-3 py-2 transition hover:border-white/15 lg:flex"><Search size={14} className="text-white/35" /><span className="text-[11px] text-white/35">Search anything</span><kbd className="ml-5 rounded border border-white/10 px-1.5 py-0.5 text-[9px] text-white/30">Ctrl K</kbd></button>
@@ -347,6 +394,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </main>
       </div>
       <SkipDialog />
+      {store.status === "ready" && <AreaDialog key={areaDialog.key} open={areaDialog.open} onOpenChange={(open) => setAreaDialog((d) => ({ ...d, open }))} editing={null} />}
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
       <Toasts />
     </div>

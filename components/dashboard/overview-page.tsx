@@ -8,9 +8,10 @@ import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Too
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { addDays, formatDate, greeting, monthKey, relativeDay, shiftMonth } from "@/lib/dates"
 import { cn } from "@/lib/utils"
-import type { ActivityStatus } from "./data"
+import { areaColors, tint, type ActivityStatus, type FocusArea } from "./data"
 import { activityCount, buildIndex, challengeInfo, clampPct, consistency, dailyScore, formatMoney, journalHasContent, journalPreview, journalText, monthTotals, percentChange, readingTime, streak, weekDates } from "./metrics"
 import { useAppData } from "./store"
+import { practiceIcons } from "./practice-icons"
 import { axisTick, Delta, EmptyState, tooltipStyle } from "./ui"
 
 function SectionHeading({ title, action, href }: { title: string; action?: string; href?: string }) {
@@ -27,6 +28,19 @@ function GoalCard({ icon: Icon, title, caption, metric, metricLabel, progress, t
   )
 }
 
+function AreaGoalCard({ area, done, total }: { area: FocusArea; done: number; total: number }) {
+  const accent = areaColors[area.color]
+  const Icon = practiceIcons[area.icon]
+  const pct = total ? clampPct((done / total) * 100) : 0
+  return (
+    <Link href={`/areas/${area.id}`} className="goal-card group flex min-h-[168px] flex-col rounded-2xl border border-white/[0.07] bg-[#171a18] p-5 text-left transition duration-200 hover:-translate-y-0.5 hover:border-white/[0.13] hover:bg-[#1a1e1b]">
+      <div className="flex w-full items-center justify-between"><span className="grid size-9 place-items-center rounded-xl" style={{ backgroundColor: tint(accent, 0.12), color: accent }}><Icon size={17} strokeWidth={1.8} /></span><span className="grid size-7 place-items-center rounded-lg text-white/30 transition group-hover:bg-white/[0.06] group-hover:text-white/80"><ArrowRight size={15} /></span></div>
+      <div className="mt-4 flex w-full items-end justify-between gap-3"><div className="min-w-0"><div className="truncate text-[13px] font-semibold text-white/90">{area.name}</div><div className="mt-1 truncate text-[11px] text-white/40">{area.description || "Your focus area"}</div></div><div className="shrink-0 text-right"><div className="text-[16px] font-semibold tracking-tight text-white">{done}/{total}</div><div className="mt-1 text-[10px] text-white/35">{total ? "tasks done today" : "no tasks yet"}</div></div></div>
+      <div className="mt-auto flex w-full items-center gap-3 pt-4"><div className="h-1 flex-1 overflow-hidden rounded-full bg-white/[0.08]"><div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: accent }} /></div><span className="text-[10px] tabular-nums text-white/40">{pct}%</span></div>
+    </Link>
+  )
+}
+
 function statusLabel(status: ActivityStatus) {
   if (status === "completed") return "Completed"
   if (status === "skipped") return "Skipped today"
@@ -35,7 +49,13 @@ function statusLabel(status: ActivityStatus) {
 }
 
 export function OverviewPage() {
-  const { profile, today, practices, logs, workouts, journal, transactions, todayStatus, setActivityStatus, requestSkip } = useAppData()
+  const { profile, today, practices, practicesFor, areas, logs, workouts, journal, transactions, todayStatus, setActivityStatus, requestSkip } = useAppData()
+  const commPractices = practicesFor(null)
+  const areaCards = areas.map((area) => {
+    const items = practicesFor(area.id)
+    const done = items.filter((p) => todayStatus[p.id] === "completed").length
+    return { area, done, total: items.length }
+  })
 
   const m = useMemo(() => {
     const index = buildIndex({ practices, logs, workouts, journal, transactions })
@@ -51,8 +71,9 @@ export function OverviewPage() {
     const month = monthTotals(transactions, monthKey(today))
     const workoutsThisWeek = week.filter((d) => (index.fit.get(d)?.count ?? 0) > 0).length
     const elapsedThisWeek = week.filter((d) => d <= today).length
-    const completedToday = Object.values(todayStatus).filter((s) => s === "completed").length
-    const skippedToday = Object.values(todayStatus).filter((s) => s === "skipped").length
+    const commStatuses = commPractices.map((p) => todayStatus[p.id])
+    const completedToday = commStatuses.filter((s) => s === "completed").length
+    const skippedToday = commStatuses.filter((s) => s === "skipped").length
     const recentJournal = journal.filter(journalHasContent).slice(0, 2)
     const journalThisWeek = journal.filter((j) => j.entry_date >= week[0] && j.entry_date <= today && journalHasContent(j)).length
     return {
@@ -61,11 +82,11 @@ export function OverviewPage() {
       streak: streak(index, profile, today),
       prevMonth: monthTotals(transactions, shiftMonth(monthKey(today), -1)),
     }
-  }, [profile, today, practices, logs, workouts, journal, transactions, todayStatus])
+  }, [profile, today, practices, commPractices, logs, workouts, journal, transactions, todayStatus])
 
   const { challenge } = m
   const name = profile.display_name.split(" ")[0] || "there"
-  const todayActivities = practices.slice(0, 4)
+  const todayActivities = commPractices.slice(0, 4)
   const savingsPct = profile.monthly_savings_goal > 0 ? clampPct((m.month.savings / profile.monthly_savings_goal) * 100) : 0
   const ringOffset = 138.23 * (1 - challenge.pct / 100)
   const headline = challenge.phase === "upcoming" ? "Your challenge is about to begin." : challenge.phase === "finished" ? "You finished the challenge." : challenge.day === 1 ? "Your next chapter starts now." : "Keep the momentum going."
@@ -116,11 +137,12 @@ export function OverviewPage() {
       </section>
 
       <section>
-        <SectionHeading title="Your three focus areas" action="View progress" href="/progress" />
+        <SectionHeading title={areaCards.length ? "Your focus areas" : "Your three focus areas"} action="View progress" href="/progress" />
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           <GoalCard icon={WalletCards} title="Financial stability" caption={`Income ${formatMoney(m.month.income, profile.currency)} · ${formatMoney(m.month.expenses, profile.currency)} expenses`} metric={formatMoney(m.month.savings, profile.currency)} metricLabel="net savings this month" progress={savingsPct} tone="bg-emerald-400/10 text-emerald-200" href="/finance" />
-          <GoalCard icon={AudioLines} title="Communication" caption="Speaking · reading · storytelling" metric={`${m.completedToday}/${Math.max(practices.length, 1)}`} metricLabel="practices done today" progress={clampPct((m.completedToday / Math.max(practices.length, 1)) * 100)} tone="bg-sky-400/10 text-sky-200" href="/communication" />
+          <GoalCard icon={AudioLines} title="Communication" caption="Speaking · reading · storytelling" metric={`${m.completedToday}/${Math.max(commPractices.length, 1)}`} metricLabel="practices done today" progress={clampPct((m.completedToday / Math.max(commPractices.length, 1)) * 100)} tone="bg-sky-400/10 text-sky-200" href="/communication" />
           <GoalCard icon={Dumbbell} title="Physique" caption={`${profile.fitness_target_min}-minute daily movement target`} metric={`${m.workoutsThisWeek} / ${m.elapsedThisWeek}`} metricLabel="active days this week" progress={clampPct((m.workoutsThisWeek / Math.max(m.elapsedThisWeek, 1)) * 100)} tone="bg-orange-300/10 text-orange-200" href="/physique" />
+          {areaCards.map((c) => <AreaGoalCard key={c.area.id} {...c} />)}
         </div>
       </section>
 
@@ -138,7 +160,7 @@ export function OverviewPage() {
               </div>
             )
           })}</CardContent>
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.06] pt-4"><div className="flex flex-wrap items-center gap-3"><span className="text-[10px] text-white/35"><CircleCheck size={12} className="mr-1 inline text-lime-200/70" />{m.completedToday} completed</span><span className="inline-flex items-center gap-1.5 text-[10px] text-white/35"><span aria-hidden="true" className="size-1.5 rounded-full bg-amber-200/70" />{m.skippedToday} skipped</span></div><Link href="/communication" className="text-[10px] font-medium text-lime-200/80 hover:text-lime-100">See all {Math.max(practices.length, 1)} <ChevronRight size={12} className="ml-0.5 inline" /></Link></div>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.06] pt-4"><div className="flex flex-wrap items-center gap-3"><span className="text-[10px] text-white/35"><CircleCheck size={12} className="mr-1 inline text-lime-200/70" />{m.completedToday} completed</span><span className="inline-flex items-center gap-1.5 text-[10px] text-white/35"><span aria-hidden="true" className="size-1.5 rounded-full bg-amber-200/70" />{m.skippedToday} skipped</span></div><Link href="/communication" className="text-[10px] font-medium text-lime-200/80 hover:text-lime-100">See all {commPractices.length} <ChevronRight size={12} className="ml-0.5 inline" /></Link></div>
         </Card>
         <Card className="panel-card rounded-2xl border border-white/[0.07] p-5 sm:p-6">
           <CardHeader className="flex-row items-start justify-between p-0"><div><CardTitle className="text-[14px] font-semibold text-white/90">This week</CardTitle><p className="mt-1.5 text-[11px] text-white/40">Your effort, adding up.</p></div><span className="rounded-lg border border-white/[0.07] px-2 py-1 text-[10px] text-white/45">{formatDate(m.weekBars[0].date, { month: "short", day: "numeric" })} — {formatDate(m.weekBars[6].date, { day: "numeric" })}</span></CardHeader>

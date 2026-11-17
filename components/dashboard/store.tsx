@@ -5,15 +5,28 @@ import type { PostgrestError } from "@supabase/supabase-js"
 import { createClient } from "@/lib/supabase/client"
 import type { Tables, TablesInsert, TablesUpdate } from "@/lib/supabase/database.types"
 import { addDays, todayISO } from "@/lib/dates"
-import { practiceIconNames, type ActivityItem, type ActivityStatus, type PracticeIcon } from "./data"
+import { areaColors, practiceIconNames, type ActivityItem, type ActivityStatus, type AreaColor, type FocusArea, type PracticeIcon } from "./data"
 
 export type Profile = Tables<"profiles">
 export type PracticeRow = Tables<"practices">
+export type AreaRow = Tables<"focus_areas">
 export type PracticeInput = { title: string; description: string; minutes: number; icon: PracticeIcon }
+export type AreaInput = { name: string; description: string; icon: PracticeIcon; color: AreaColor }
+
+const asIcon = (value: string): PracticeIcon => ((practiceIconNames as readonly string[]).includes(value) ? (value as PracticeIcon) : "target")
+
+const toArea = (row: AreaRow): FocusArea => ({
+  id: row.id,
+  name: row.name,
+  description: row.description,
+  icon: asIcon(row.icon),
+  color: row.color in areaColors ? (row.color as AreaColor) : "violet",
+})
 
 const toActivity = (row: PracticeRow): ActivityItem => ({
   id: row.key,
   rowId: row.id,
+  areaId: row.area_id,
   title: row.title,
   description: row.description,
   minutes: row.minutes,
@@ -32,6 +45,7 @@ type Toast = { id: number; message: string; tone: "success" | "error" }
 
 type StoreState = {
   profile: Profile | null
+  areaRows: AreaRow[]
   practiceRows: PracticeRow[]
   logs: ActivityLog[]
   notes: PracticeNote[]
@@ -42,7 +56,7 @@ type StoreState = {
   journal: JournalEntry[]
 }
 
-const emptyState: StoreState = { profile: null, practiceRows: [], logs: [], notes: [], transactions: [], clients: [], workouts: [], bodyMetrics: [], journal: [] }
+const emptyState: StoreState = { profile: null, areaRows: [], practiceRows: [], logs: [], notes: [], transactions: [], clients: [], workouts: [], bodyMetrics: [], journal: [] }
 
 type StoreValue = StoreState & {
   user: { id: string; email: string }
@@ -53,16 +67,23 @@ type StoreValue = StoreState & {
   toasts: Toast[]
   notify: (message: string, tone?: Toast["tone"]) => void
   dismissToast: (id: number) => void
-  /** The user's active daily practices, in display order. */
+  /** The user's custom focus areas (shown as sidebar tabs). */
+  areas: FocusArea[]
+  addArea: (input: AreaInput) => Promise<FocusArea | null>
+  updateArea: (id: string, input: AreaInput) => Promise<boolean>
+  deleteArea: (id: string) => Promise<boolean>
+  /** Every active practice across all areas, in display order. */
   practices: ActivityItem[]
-  addPractice: (input: PracticeInput) => Promise<boolean>
+  /** Practices for one area; null = Communication. */
+  practicesFor: (areaId: string | null) => ActivityItem[]
+  addPractice: (input: PracticeInput, areaId: string | null) => Promise<boolean>
   updatePractice: (rowId: string, input: PracticeInput) => Promise<boolean>
   deletePractice: (rowId: string) => Promise<void>
   todayStatus: Record<string, ActivityStatus>
   skipTarget: ActivityItem | null
   requestSkip: (activity: ActivityItem | null) => void
   setActivityStatus: (activityId: string, status: ActivityStatus, extra?: { skipReason?: string | null; note?: string | null }) => Promise<void>
-  setCommunicationRestDay: (on: boolean) => Promise<void>
+  setRestDay: (areaId: string | null, on: boolean) => Promise<void>
   savePracticeNote: (note: string) => Promise<boolean>
   addTransaction: (input: Omit<TablesInsert<"transactions">, "user_id">) => Promise<boolean>
   deleteTransaction: (id: string) => Promise<void>
@@ -119,8 +140,9 @@ export function DataProvider({ user, children }: { user: { id: string; email: st
 
   const reload = useCallback(async () => {
     const since = addDays(todayISO(), -400)
-    const [profile, practiceRows, logs, notes, transactions, clients, workouts, bodyMetrics, journal] = await Promise.all([
+    const [profile, areaRows, practiceRows, logs, notes, transactions, clients, workouts, bodyMetrics, journal] = await Promise.all([
       supabase.from("profiles").select("*").eq("id", user.id).maybeSingle(),
+      supabase.from("focus_areas").select("*").eq("archived", false).order("position", { ascending: true }).order("created_at", { ascending: true }),
       supabase.from("practices").select("*").eq("archived", false).order("position", { ascending: true }).order("created_at", { ascending: true }),
       supabase.from("activity_logs").select("*").gte("log_date", since),
       supabase.from("practice_notes").select("*").gte("note_date", since),
@@ -130,7 +152,7 @@ export function DataProvider({ user, children }: { user: { id: string; email: st
       supabase.from("body_metrics").select("*").order("measured_on", { ascending: true }),
       supabase.from("journal_entries").select("*").order("entry_date", { ascending: false }),
     ])
-    const error = [profile, practiceRows, logs, notes, transactions, clients, workouts, bodyMetrics, journal].find((r) => r.error)?.error
+    const error = [profile, areaRows, practiceRows, logs, notes, transactions, clients, workouts, bodyMetrics, journal].find((r) => r.error)?.error
     if (error) {
       setLoadError(error.message)
       setStatus("error")
@@ -149,6 +171,7 @@ export function DataProvider({ user, children }: { user: { id: string; email: st
     }
     setState({
       profile: profileRow,
+      areaRows: areaRows.data ?? [],
       practiceRows: practiceRows.data ?? [],
       logs: logs.data ?? [],
       notes: notes.data ?? [],
@@ -175,7 +198,37 @@ export function DataProvider({ user, children }: { user: { id: string; email: st
     void reload()
   }, [notify, reload])
 
-  const practices = useMemo(() => state.practiceRows.map(toActivity), [state.practiceRows])
+  const areas = useMemo(() => state.areaRows.map(toArea), [state.areaRows])
+  const areaIds = useMemo(() => new Set(state.areaRows.map((a) => a.id)), [state.areaRows])
+  // Practices in a deleted area are hidden everywhere.
+  const practices = useMemo(() => state.practiceRows.filter((p) => !p.area_id || areaIds.has(p.area_id)).map(toActivity), [state.practiceRows, areaIds])
+  const practicesFor = useCallback((areaId: string | null) => practices.filter((p) => p.areaId === areaId), [practices])
+
+  const addArea = useCallback(async (input: AreaInput) => {
+    const position = state.areaRows.reduce((max, a) => Math.max(max, a.position), -1) + 1
+    const { data, error } = await supabase.from("focus_areas").insert({ ...input, position, user_id: user.id }).select().single()
+    if (error) { fail(error); return null }
+    setState((s) => ({ ...s, areaRows: [...s.areaRows, data] }))
+    notify(`"${data.name}" added to your sidebar`)
+    return toArea(data)
+  }, [supabase, user.id, state.areaRows, fail, notify])
+
+  const updateArea = useCallback(async (id: string, input: AreaInput) => {
+    const { data, error } = await supabase.from("focus_areas").update(input).eq("id", id).select().single()
+    if (error) { fail(error); return false }
+    setState((s) => ({ ...s, areaRows: s.areaRows.map((a) => (a.id === id ? data : a)) }))
+    notify("Area updated")
+    return true
+  }, [supabase, fail, notify])
+
+  /** Archives the area; its tasks disappear from lists but past history stays in the database. */
+  const deleteArea = useCallback(async (id: string) => {
+    const { error } = await supabase.from("focus_areas").update({ archived: true }).eq("id", id)
+    if (error) { fail(error); return false }
+    setState((s) => ({ ...s, areaRows: s.areaRows.filter((a) => a.id !== id) }))
+    notify("Area deleted")
+    return true
+  }, [supabase, fail, notify])
 
   const todayStatus = useMemo(() => {
     const result: Record<string, ActivityStatus> = Object.fromEntries(practices.map((a) => [a.id, "pending" as ActivityStatus]))
@@ -183,12 +236,12 @@ export function DataProvider({ user, children }: { user: { id: string; email: st
     return result
   }, [state.logs, today, practices])
 
-  const addPractice = useCallback(async (input: PracticeInput) => {
+  const addPractice = useCallback(async (input: PracticeInput, areaId: string | null) => {
     const position = state.practiceRows.reduce((max, p) => Math.max(max, p.position), -1) + 1
-    const { data, error } = await supabase.from("practices").insert({ ...input, position, user_id: user.id }).select().single()
+    const { data, error } = await supabase.from("practices").insert({ ...input, area_id: areaId, position, user_id: user.id }).select().single()
     if (error) { fail(error); return false }
     setState((s) => ({ ...s, practiceRows: [...s.practiceRows, data] }))
-    notify("Practice added")
+    notify(areaId ? "Task added" : "Practice added")
     return true
   }, [supabase, user.id, state.practiceRows, fail, notify])
 
@@ -222,17 +275,21 @@ export function DataProvider({ user, children }: { user: { id: string; email: st
     if (error) fail(error)
   }, [today, user.id, supabase, fail])
 
-  const setCommunicationRestDay = useCallback(async (on: boolean) => {
+  /** Marks (or clears) a rest day for one area only; null = Communication. */
+  const setRestDay = useCallback(async (areaId: string | null, on: boolean) => {
     const date = today
     const now = new Date().toISOString()
+    const scoped = practices.filter((p) => p.areaId === areaId)
+    const keys = new Set(scoped.map((p) => p.id))
+    if (keys.size === 0) return
     setState((s) => {
-      const others = s.logs.filter((l) => l.log_date !== date || (!on && l.status !== "rest-day"))
+      const others = s.logs.filter((l) => l.log_date !== date || !keys.has(l.activity_id) || (!on && l.status !== "rest-day"))
       if (!on) return { ...s, logs: others }
-      return { ...s, logs: [...others, ...practices.map((a) => ({ id: `tmp-${a.id}-${date}`, user_id: user.id, log_date: date, activity_id: a.id, status: "rest-day" as const, skip_reason: null, note: null, created_at: now, updated_at: now }))] }
+      return { ...s, logs: [...others, ...scoped.map((a) => ({ id: `tmp-${a.id}-${date}`, user_id: user.id, log_date: date, activity_id: a.id, status: "rest-day" as const, skip_reason: null, note: null, created_at: now, updated_at: now }))] }
     })
     const { error } = on
-      ? await supabase.from("activity_logs").upsert(practices.map((a) => ({ user_id: user.id, log_date: date, activity_id: a.id, status: "rest-day" as const, skip_reason: null, note: null })), { onConflict: "user_id,log_date,activity_id" })
-      : await supabase.from("activity_logs").delete().match({ user_id: user.id, log_date: date, status: "rest-day" })
+      ? await supabase.from("activity_logs").upsert(scoped.map((a) => ({ user_id: user.id, log_date: date, activity_id: a.id, status: "rest-day" as const, skip_reason: null, note: null })), { onConflict: "user_id,log_date,activity_id" })
+      : await supabase.from("activity_logs").delete().eq("user_id", user.id).eq("log_date", date).eq("status", "rest-day").in("activity_id", [...keys])
     if (error) fail(error)
     else notify(on ? "Rest day saved. Recovery counts too." : "Rest day removed")
   }, [today, user.id, supabase, fail, notify, practices])
@@ -340,7 +397,12 @@ export function DataProvider({ user, children }: { user: { id: string; email: st
     toasts,
     notify,
     dismissToast,
+    areas,
+    addArea,
+    updateArea,
+    deleteArea,
     practices,
+    practicesFor,
     addPractice,
     updatePractice,
     deletePractice,
@@ -348,7 +410,7 @@ export function DataProvider({ user, children }: { user: { id: string; email: st
     skipTarget,
     requestSkip: setSkipTarget,
     setActivityStatus,
-    setCommunicationRestDay,
+    setRestDay,
     savePracticeNote,
     addTransaction,
     deleteTransaction,

@@ -44,11 +44,11 @@ export function MetricCard({ label, value, detail, icon: Icon, tone }: { label: 
   )
 }
 
-export function ProgressBar({ value, className, barClassName = "bg-lime-300", label }: { value: number; className?: string; barClassName?: string; label: string }) {
+export function ProgressBar({ value, className, barClassName = "bg-lime-300", barColor, label }: { value: number; className?: string; barClassName?: string; barColor?: string; label: string }) {
   const pct = Math.max(0, Math.min(100, value))
   return (
     <div className={cn("h-1.5 overflow-hidden rounded-full bg-white/10", className)} role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(pct)}>
-      <div className={cn("h-full rounded-full transition-all duration-500", barClassName)} style={{ width: `${pct}%` }} />
+      <div className={cn("h-full rounded-full transition-all duration-500", !barColor && barClassName)} style={{ width: `${pct}%`, backgroundColor: barColor }} />
     </div>
   )
 }

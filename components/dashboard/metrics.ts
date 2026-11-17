@@ -28,7 +28,9 @@ export function challengeInfo(profile: Profile, today: string) {
 export type DayIndex = {
   /** How many practices make up a full communication day. */
   practiceCount: number
-  comm: Map<string, { completed: number; skipped: number; rest: number; minutes: number }>
+  comm: Map<string, AreaDay>
+  /** Custom focus areas: how many tasks each has, and per-day progress. */
+  areas: Map<string, { count: number; days: Map<string, AreaDay> }>
   fit: Map<string, { minutes: number; count: number; rest: boolean }>
   journal: Set<string>
   tx: Map<string, number>
@@ -38,17 +40,30 @@ export function journalHasContent(entry: Pick<JournalEntry, "accomplished" | "we
   return [entry.accomplished, entry.went_wrong, entry.learned, entry.improve, entry.priorities].some((v) => v.trim().length > 0)
 }
 
+export type AreaDay = { completed: number; skipped: number; rest: number; minutes: number }
+
 export function buildIndex(data: { practices: ActivityItem[]; logs: ActivityLog[]; workouts: Workout[]; journal: JournalEntry[]; transactions: Transaction[] }): DayIndex {
-  const minutesById = new Map(data.practices.map((a) => [a.id, a.minutes]))
+  const byKey = new Map(data.practices.map((a) => [a.id, a]))
   const comm: DayIndex["comm"] = new Map()
+  const areas: DayIndex["areas"] = new Map()
+  for (const p of data.practices) {
+    if (!p.areaId) continue
+    const area = areas.get(p.areaId) ?? { count: 0, days: new Map() }
+    area.count++
+    areas.set(p.areaId, area)
+  }
   for (const log of data.logs) {
-    const entry = comm.get(log.log_date) ?? { completed: 0, skipped: 0, rest: 0, minutes: 0 }
+    const practice = byKey.get(log.activity_id)
+    // Logs of practices that no longer exist are legacy Communication history.
+    const target = practice?.areaId ? areas.get(practice.areaId)?.days : comm
+    if (!target) continue
+    const entry = target.get(log.log_date) ?? { completed: 0, skipped: 0, rest: 0, minutes: 0 }
     if (log.status === "completed") {
       entry.completed++
-      entry.minutes += minutesById.get(log.activity_id) ?? 0
+      entry.minutes += practice?.minutes ?? 0
     } else if (log.status === "skipped") entry.skipped++
     else entry.rest++
-    comm.set(log.log_date, entry)
+    target.set(log.log_date, entry)
   }
   const fit: DayIndex["fit"] = new Map()
   for (const w of data.workouts) {
@@ -63,13 +78,22 @@ export function buildIndex(data: { practices: ActivityItem[]; logs: ActivityLog[
   const journal = new Set(data.journal.filter(journalHasContent).map((j) => j.entry_date))
   const tx: DayIndex["tx"] = new Map()
   for (const t of data.transactions) tx.set(t.occurred_on, (tx.get(t.occurred_on) ?? 0) + 1)
-  return { practiceCount: Math.max(data.practices.length, 1), comm, fit, journal, tx }
+  return { practiceCount: Math.max(data.practices.filter((p) => !p.areaId).length, 1), comm, areas, fit, journal, tx }
 }
 
-/** A communication day counts as kept with any completed practice or a planned rest day. */
-export function commKept(index: DayIndex, date: string) {
-  const c = index.comm.get(date)
+/** Per-day progress for an area; null = Communication. */
+export function areaDays(index: DayIndex, areaId: string | null) {
+  return areaId ? index.areas.get(areaId)?.days ?? new Map<string, AreaDay>() : index.comm
+}
+
+/** A day counts as kept for an area with any completed task or a planned rest day. */
+export function areaKept(index: DayIndex, areaId: string | null, date: string) {
+  const c = areaDays(index, areaId).get(date)
   return !!c && (c.completed > 0 || c.rest > 0)
+}
+
+export function commKept(index: DayIndex, date: string) {
+  return areaKept(index, null, date)
 }
 
 /** 0–100: share of the day's plan done across communication, movement and journaling. Rest days count as kept. */
@@ -79,7 +103,15 @@ export function dailyScore(index: DayIndex, date: string, fitnessTarget: number)
   const comm = c ? (c.rest > 0 ? 1 : Math.min(c.completed / index.practiceCount, 1)) : 0
   const fit = f ? (f.rest && f.minutes === 0 ? 1 : Math.min(f.minutes / Math.max(fitnessTarget, 1), 1)) : 0
   const journal = index.journal.has(date) ? 1 : 0
-  return Math.round(((comm + fit + journal) / 3) * 100)
+  let sum = comm + fit + journal
+  let parts = 3
+  for (const area of index.areas.values()) {
+    if (area.count === 0) continue
+    const d = area.days.get(date)
+    sum += d ? (d.rest > 0 ? 1 : Math.min(d.completed / area.count, 1)) : 0
+    parts++
+  }
+  return Math.round((sum / parts) * 100)
 }
 
 /** Average daily score over the `days` ending on `end`, ignoring days before the challenge and a not-yet-started today. */
@@ -104,9 +136,9 @@ export function streak(index: DayIndex, profile: Profile, today: string) {
   return count
 }
 
-/** Communication-only streak: days with at least one completed practice or a rest day. */
-export function practiceStreak(index: DayIndex, today: string) {
-  const kept = (d: string) => commKept(index, d)
+/** Streak for one area (null = Communication): days with at least one completed task or a rest day. */
+export function practiceStreak(index: DayIndex, today: string, areaId: string | null = null) {
+  const kept = (d: string) => areaKept(index, areaId, d)
   let day = kept(today) ? today : addDays(today, -1)
   let count = 0
   while (kept(day)) {
@@ -122,7 +154,9 @@ export function weekDates(today: string, offsetWeeks = 0) {
 }
 
 export function activityCount(index: DayIndex, date: string) {
-  return (index.comm.get(date)?.completed ?? 0) + (index.fit.get(date)?.count ?? 0) + (index.journal.has(date) ? 1 : 0) + (index.tx.get(date) ?? 0)
+  let areaDone = 0
+  for (const area of index.areas.values()) areaDone += area.days.get(date)?.completed ?? 0
+  return (index.comm.get(date)?.completed ?? 0) + areaDone + (index.fit.get(date)?.count ?? 0) + (index.journal.has(date) ? 1 : 0) + (index.tx.get(date) ?? 0)
 }
 
 export function percentChange(current: number, previous: number) {

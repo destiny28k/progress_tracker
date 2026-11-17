@@ -2,15 +2,18 @@
 
 import { useMemo } from "react"
 import { BookOpen, Check, Dumbbell, Heart, Sparkles, Target, TrendingUp, WalletCards } from "lucide-react"
+import type { LucideIcon } from "lucide-react"
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis } from "recharts"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { addDays, dateRange, formatDate, monthKey } from "@/lib/dates"
 import { activityCount, buildIndex, challengeInfo, clampPct, consistency, dailyScore, formatMoney, monthTotals, percentChange, weekDates } from "./metrics"
+import { areaColors } from "./data"
+import { practiceIcons } from "./practice-icons"
 import { useAppData } from "./store"
 import { axisTick, Delta, Legend, MetricCard, PageHeading, ProgressBar, tooltipStyle } from "./ui"
 
 export function ProgressPage() {
-  const { profile, today, practices, logs, workouts, journal, transactions } = useAppData()
+  const { profile, today, practices, practicesFor, areas, logs, workouts, journal, transactions } = useAppData()
 
   const m = useMemo(() => {
     const index = buildIndex({ practices, logs, workouts, journal, transactions })
@@ -36,14 +39,22 @@ export function ProgressPage() {
       const date = addDays(profile.start_date, i)
       return { date, day: i + 1, future: date > today, score: date > today ? 0 : dailyScore(index, date, profile.fitness_target_min) }
     })
-    return { c, elapsed, overall, weekCount, lastWeekCount, resets, bars, commDone, activeDays, savings, heat }
-  }, [profile, today, practices, logs, workouts, journal, transactions])
+    const areaDone = new Map(areas.map((a) => [a.id, elapsed.reduce((s, d) => s + (index.areas.get(a.id)?.days.get(d)?.completed ?? 0), 0)]))
+    return { c, elapsed, overall, weekCount, lastWeekCount, resets, bars, commDone, activeDays, savings, heat, areaDone }
+  }, [profile, today, practices, areas, logs, workouts, journal, transactions])
 
   const { c } = m
-  const goalRows = [
+  const commCount = Math.max(practicesFor(null).length, 1)
+  const goalRows: { icon: LucideIcon; label: string; pct: number; color?: string; accent?: string; description: string }[] = [
     { icon: WalletCards, label: "Financial stability", pct: profile.monthly_savings_goal > 0 ? clampPct((m.savings / profile.monthly_savings_goal) * 100) : 0, color: "bg-emerald-200", description: `${formatMoney(m.savings, profile.currency)} of ${formatMoney(profile.monthly_savings_goal, profile.currency)} saved this month` },
-    { icon: BookOpen, label: "Communication", pct: m.elapsed.length ? clampPct((m.commDone / (m.elapsed.length * Math.max(practices.length, 1))) * 100) : 0, color: "bg-sky-200", description: `${m.commDone} of ${m.elapsed.length * Math.max(practices.length, 1)} practices completed` },
+    { icon: BookOpen, label: "Communication", pct: m.elapsed.length ? clampPct((m.commDone / (m.elapsed.length * commCount)) * 100) : 0, color: "bg-sky-200", description: `${m.commDone} of ${m.elapsed.length * commCount} practices completed` },
     { icon: Dumbbell, label: "Physique", pct: m.elapsed.length ? clampPct((m.activeDays / m.elapsed.length) * 100) : 0, color: "bg-orange-200", description: `${m.activeDays} of ${m.elapsed.length} days with movement or planned rest` },
+    ...areas.map((area) => {
+      const count = practicesFor(area.id).length
+      const done = m.areaDone.get(area.id) ?? 0
+      const possible = m.elapsed.length * count
+      return { icon: practiceIcons[area.icon], label: area.name, pct: possible ? clampPct((done / possible) * 100) : 0, accent: areaColors[area.color], description: count ? `${done} of ${possible} tasks completed` : "Add tasks to start tracking" }
+    }),
   ]
 
   return (
@@ -78,10 +89,10 @@ export function ProgressPage() {
         <Card className="panel-card rounded-2xl border border-white/[0.07] p-5 sm:p-6">
           <CardHeader className="p-0"><CardTitle className="text-[14px]">Goal-by-goal progress</CardTitle><p className="mt-1.5 text-[10px] text-white/40">Since your challenge started.</p></CardHeader>
           <CardContent className="mt-5 flex flex-col gap-5 p-0">
-            {goalRows.map(({ icon: Icon, label, pct, color, description }) => (
-              <div key={label}>
+            {goalRows.map(({ icon: Icon, label, pct, color, accent, description }, i) => (
+              <div key={i}>
                 <div className="flex items-center gap-2"><span className="grid size-7 place-items-center rounded-lg bg-white/[0.045] text-white/65"><Icon size={14} /></span><span className="flex-1 text-[11px] font-medium text-white/75">{label}</span><span className="text-[11px] font-semibold">{pct}%</span></div>
-                <ProgressBar className="ml-9 mt-2 bg-white/[0.07]" value={pct} barClassName={color} label={`${label} progress`} />
+                <ProgressBar className="ml-9 mt-2 bg-white/[0.07]" value={pct} barClassName={color} barColor={accent} label={`${label} progress`} />
                 <div className="ml-9 mt-1.5 text-[9px] text-white/35">{description}</div>
               </div>
             ))}

@@ -7,9 +7,10 @@ import { ArrowRight, AudioLines, BookOpen, CalendarDays, Check, ChevronLeft, Che
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { dateRange, formatDate, monthKey, parseISODate, toISODate } from "@/lib/dates"
 import { cn } from "@/lib/utils"
-import { workoutKinds, type WorkoutKind } from "./data"
+import { areaColors as focusAreaColors, workoutKinds, type ActivityItem, type WorkoutKind } from "./data"
+import { practiceIcons } from "./practice-icons"
 import { buildIndex, challengeInfo, dailyScore, formatMoney, journalHasContent, journalPreview, type DayIndex } from "./metrics"
-import { useAppData } from "./store"
+import { useAppData, type ActivityLog } from "./store"
 import { EmptyState, PageHeading } from "./ui"
 
 const areaColors = { comm: "bg-sky-300", fit: "bg-orange-300", journal: "bg-violet-300", money: "bg-emerald-300" }
@@ -62,6 +63,31 @@ function CalendarChevron({ orientation }: { orientation?: "left" | "right" | "up
   return orientation === "left" ? <ChevronLeft size={15} /> : <ChevronRight size={15} />
 }
 
+/** The tasks of one area and how each went on the selected day. */
+function TaskList({ title, icon, items, dayLogs, href }: { title: string; icon: React.ReactNode; items: ActivityItem[]; dayLogs: Map<string, ActivityLog>; href?: string }) {
+  const done = items.filter((a) => dayLogs.get(a.id)?.status === "completed").length
+  const heading = <span className="flex min-w-0 items-center gap-2 text-[11px] font-medium text-white/75">{icon}<span className="truncate">{title}</span></span>
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2">{href ? <Link href={href} className="min-w-0 hover:text-white">{heading}</Link> : heading}<span className="shrink-0 text-[10px] text-white/40">{done} / {items.length}</span></div>
+      <ul className="mt-2 flex flex-col gap-1">
+        {items.map((a) => {
+          const log = dayLogs.get(a.id)
+          const Icon = log?.status === "completed" ? Check : log?.status === "skipped" ? RotateCcw : log?.status === "rest-day" ? Clock3 : null
+          return (
+            <li key={a.id} className="flex items-center gap-2 text-[10px]">
+              <span className={cn("grid size-4 shrink-0 place-items-center rounded-full", log?.status === "completed" ? "bg-lime-300/15 text-lime-200" : log ? "bg-white/[0.05] text-white/45" : "border border-white/10")}>{Icon && <Icon size={9} />}</span>
+              <span className={cn("flex-1 truncate", log?.status === "completed" ? "text-white/70" : "text-white/40")}>{a.title}</span>
+              {log?.status === "skipped" && <span className="text-amber-100/60">{log.skip_reason ?? "Skipped"}</span>}
+              {log?.status === "rest-day" && <span className="text-sky-100/60">Rest</span>}
+            </li>
+          )
+        })}
+      </ul>
+    </>
+  )
+}
+
 function Legend() {
   return (
     <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-white/[0.06] pt-4 text-[10px] text-white/45">
@@ -72,7 +98,7 @@ function Legend() {
 }
 
 export function CalendarPage() {
-  const { profile, today, practices, logs, workouts, journal, transactions, notes } = useAppData()
+  const { profile, today, practices, practicesFor, areas, logs, workouts, journal, transactions, notes } = useAppData()
   const [selected, setSelected] = useState(today)
   const [month, setMonth] = useState(() => parseISODate(today))
 
@@ -163,23 +189,18 @@ export function CalendarPage() {
               {selected < profile.start_date && <p className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2.5 text-[10px] text-white/40">This day is before your challenge started on {formatDate(profile.start_date)}.</p>}
 
               <div>
-                <div className="flex items-center justify-between"><span className="flex items-center gap-2 text-[11px] font-medium text-white/75"><AudioLines size={13} className="text-sky-200" />Communication</span><span className="text-[10px] text-white/40">{[...day.dayLogs.values()].filter((l) => l.status === "completed").length} / {practices.length}</span></div>
-                <ul className="mt-2 flex flex-col gap-1">
-                  {practices.map((a) => {
-                    const log = day.dayLogs.get(a.id)
-                    const Icon = log?.status === "completed" ? Check : log?.status === "skipped" ? RotateCcw : log?.status === "rest-day" ? Clock3 : null
-                    return (
-                      <li key={a.id} className="flex items-center gap-2 text-[10px]">
-                        <span className={cn("grid size-4 shrink-0 place-items-center rounded-full", log?.status === "completed" ? "bg-lime-300/15 text-lime-200" : log ? "bg-white/[0.05] text-white/45" : "border border-white/10")}>{Icon && <Icon size={9} />}</span>
-                        <span className={cn("flex-1 truncate", log?.status === "completed" ? "text-white/70" : "text-white/40")}>{a.title}</span>
-                        {log?.status === "skipped" && <span className="text-amber-100/60">{log.skip_reason ?? "Skipped"}</span>}
-                        {log?.status === "rest-day" && <span className="text-sky-100/60">Rest</span>}
-                      </li>
-                    )
-                  })}
-                </ul>
+                <TaskList title="Communication" icon={<AudioLines size={13} className="text-sky-200" />} items={practicesFor(null)} dayLogs={day.dayLogs} />
                 {day.note && <p className="mt-2 rounded-lg bg-white/[0.025] px-2.5 py-2 text-[10px] italic text-white/45">“{day.note}”</p>}
               </div>
+
+              {areas.filter((area) => practicesFor(area.id).length > 0).map((area) => {
+                const AreaIcon = practiceIcons[area.icon]
+                return (
+                  <div key={area.id} className="border-t border-white/[0.06] pt-4">
+                    <TaskList title={area.name} href={`/areas/${area.id}`} icon={<AreaIcon size={13} style={{ color: focusAreaColors[area.color] }} />} items={practicesFor(area.id)} dayLogs={day.dayLogs} />
+                  </div>
+                )
+              })}
 
               <div className="border-t border-white/[0.06] pt-4">
                 <div className="flex items-center justify-between"><span className="flex items-center gap-2 text-[11px] font-medium text-white/75"><Dumbbell size={13} className="text-orange-200" />Movement</span><span className="text-[10px] text-white/40">{restDay && minutes === 0 ? "Rest day" : `${minutes} / ${profile.fitness_target_min} min`}</span></div>

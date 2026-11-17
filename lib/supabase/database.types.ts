@@ -38,9 +38,21 @@ export type Database = {
         created_at: string
         updated_at: string
       }, "log_date" | "activity_id" | "status">
+      focus_areas: Table<{
+        id: string
+        user_id: string
+        name: string
+        description: string
+        icon: string
+        color: string
+        position: number
+        archived: boolean
+        created_at: string
+      }, "name">
       practices: Table<{
         id: string
         user_id: string
+        area_id: string | null
         key: string
         title: string
         description: string
